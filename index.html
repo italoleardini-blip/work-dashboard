@@ -356,11 +356,24 @@
       renderHeaderActions();
       return;
     }
-    tokenClient = google.accounts.oauth2.initTokenClient({
-      client_id: CFG.CLIENT_ID,
-      scope: SCOPE,
-      callback: function () {} // set per-request in requestToken()
-    });
+
+    // Always show a usable "click to connect" state right away. Google's silent
+    // reconnect attempt below runs in the background and can upgrade this — but
+    // if it hangs or fails without calling back (happens with strict cookie
+    // settings), the button here is still there so the page never looks blank.
+    renderBanner("", "Not connected. Click “Connect Google Drive” to load your tasks.");
+    renderHeaderActions();
+
+    try {
+      tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: CFG.CLIENT_ID,
+        scope: SCOPE,
+        callback: function () {} // set per-request in requestToken()
+      });
+    } catch (e) {
+      renderBanner("err", "Couldn't set up Google sign-in: " + escapeHtml(e.message || String(e)));
+      return;
+    }
 
     var cachedToken = null, cachedExp = 0;
     try {
