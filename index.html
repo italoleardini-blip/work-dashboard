@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Work Dashboard (Microsoft 365)</title>
-<script type="text/javascript" src="https://alcdn.msauth.net/browser/2.35.0/js/msal-browser.min.js"></script>
+<title>Work Dashboard (Google Drive)</title>
+<script type="text/javascript" src="https://accounts.google.com/gsi/client"></script>
 <style>
   :root {
     --surface-1:      #fcfcfb;
@@ -149,22 +149,22 @@
 <div class="app">
 
   <!-- ======================================================================
-       SETUP: replace these two values after you register the Azure AD app.
-       See SETUP-GUIDE.md, step 1, for exactly where to find them.
+       SETUP: replace CLIENT_ID after you create the OAuth Client ID in
+       Google Cloud Console. See SETUP-GUIDE.md, step 1, for exactly where
+       to find it.
   ======================================================================= -->
   <script>
     window.DASHBOARD_CONFIG = {
-      CLIENT_ID: "YOUR_CLIENT_ID_HERE",       // Application (client) ID from Azure
-      TENANT_ID: "YOUR_TENANT_ID_HERE",       // Directory (tenant) ID from Azure
-      FILE_PATH: "TasksDashboard/tasks.xlsx", // where the task file lives in your OneDrive
-      TABLE_NAME: "Tasks"
+      CLIENT_ID: "YOUR_CLIENT_ID_HERE.apps.googleusercontent.com", // OAuth Client ID from Google Cloud
+      FILE_NAME: "Work Dashboard Tasks",   // name of the Google Sheet this creates in your Drive
+      SHEET_NAME: "Sheet1"
     };
   </script>
 
   <header>
     <div>
       <h1>Work Dashboard</h1>
-      <p class="sub">Synced to OneDrive — every project, priority, and deadline in one place.</p>
+      <p class="sub">Synced to Google Drive — every project, priority, and deadline in one place.</p>
     </div>
     <div class="header-actions" id="header-actions"></div>
   </header>
@@ -198,7 +198,7 @@
 
   <section id="project-groups"></section>
 
-  <footer class="hint" id="footer-hint">Your tasks are stored in <strong>OneDrive → TasksDashboard → tasks.xlsx</strong> — open that file any time to see the raw data.</footer>
+  <footer class="hint" id="footer-hint">Your tasks are stored in a Google Sheet named <strong>Work Dashboard Tasks</strong> in your Drive — open it any time to see the raw data.</footer>
 </div>
 
 <div class="modal-overlay hidden" id="modal-overlay">
@@ -258,13 +258,10 @@
 (function () {
   "use strict";
   var CFG = window.DASHBOARD_CONFIG;
-  var GRAPH = "https://graph.microsoft.com/v1.0";
-  var FILE_ITEM_PATH = "/me/drive/root:/" + CFG.FILE_PATH; // e.g. /me/drive/root:/TasksDashboard/tasks.xlsx
+  var SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets";
+  var DRIVE_API = "https://www.googleapis.com/drive/v3/files";
+  var SCOPE = "https://www.googleapis.com/auth/drive.file";
   var COLUMNS = ["Id","Title","Project","Priority","Deadline","Status","Notes","EmailSubject","EmailLink","CreatedAt"];
-
-  // Minimal blank workbook (header row + 1 example row) with a "Tasks" table already defined,
-  // used only if tasks.xlsx doesn't exist yet in OneDrive. Generated once, embedded as base64.
-  var TEMPLATE_XLSX_B64 = "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";
 
   function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
   function todayStr() { var d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
@@ -283,7 +280,10 @@
     openNotes: {},
     connected: false,
     account: null,
-    busy: false
+    busy: false,
+    spreadsheetId: null,
+    sheetId: 0,
+    accessToken: null
   };
 
   var el = {};
@@ -301,12 +301,11 @@
     showToast._t = setTimeout(function(){ el.toast.classList.remove("show"); }, 4500);
   }
 
-  // ---------------- Auth ----------------
-  var msalInstance = null;
-  var tokenCache = null;
+  // ---------------- Auth (Google Identity Services) ----------------
+  var tokenClient = null;
 
   function setupNotDone() {
-    return !CFG.CLIENT_ID || CFG.CLIENT_ID.indexOf("YOUR_") === 0 || !CFG.TENANT_ID || CFG.TENANT_ID.indexOf("YOUR_") === 0;
+    return !CFG.CLIENT_ID || CFG.CLIENT_ID.indexOf("YOUR_") === 0;
   }
 
   function renderBanner(mode, msg) {
@@ -317,7 +316,7 @@
   function renderHeaderActions() {
     if (state.connected) {
       el.headerActions.innerHTML =
-        '<span style="font-size:12.5px;color:var(--text-secondary);">' + escapeHtml(state.account ? state.account.username : "") + '</span>' +
+        '<span style="font-size:12.5px;color:var(--text-secondary);">Connected</span>' +
         '<button class="ghost" id="btn-refresh">⟳ Refresh</button>' +
         '<button class="ghost" id="btn-signout">Sign out</button>' +
         '<button class="primary" id="btn-add">+ Add task</button>';
@@ -325,150 +324,161 @@
       document.getElementById("btn-refresh").addEventListener("click", function(){ loadTasks(true); });
       document.getElementById("btn-signout").addEventListener("click", signOut);
     } else {
-      el.headerActions.innerHTML = '<button class="primary" id="btn-signin">Connect Microsoft 365</button>';
+      el.headerActions.innerHTML = '<button class="primary" id="btn-signin">Connect Google Drive</button>';
       var btn = document.getElementById("btn-signin");
       if (btn) btn.addEventListener("click", signIn);
     }
   }
 
+  function saveToken(accessToken, expiresInSec) {
+    state.accessToken = accessToken;
+    var expiresAt = Date.now() + ((expiresInSec || 3500) * 1000);
+    try {
+      localStorage.setItem("gd_access_token", accessToken);
+      localStorage.setItem("gd_token_expires_at", String(expiresAt));
+    } catch (e) {}
+  }
+
+  function clearToken() {
+    state.accessToken = null;
+    try { localStorage.removeItem("gd_access_token"); localStorage.removeItem("gd_token_expires_at"); } catch (e) {}
+  }
+
   function init() {
     renderStats();
     if (setupNotDone()) {
-      renderBanner("warn", "Setup needed — open this file and fill in <code>CLIENT_ID</code> and <code>TENANT_ID</code> at the top of the script, following SETUP-GUIDE.md step 1.");
+      renderBanner("warn", "Setup needed — open this file and fill in <code>CLIENT_ID</code> at the top of the script, following SETUP-GUIDE.md step 1.");
       renderHeaderActions();
       return;
     }
-    if (!window.msal) {
-      renderBanner("err", "Couldn't load the Microsoft sign-in library (msal-browser). Check your internet connection and reload.");
+    if (!window.google || !window.google.accounts || !window.google.accounts.oauth2) {
+      renderBanner("err", "Couldn't load the Google sign-in library. Check your internet connection and reload.");
       renderHeaderActions();
       return;
     }
-    msalInstance = new msal.PublicClientApplication({
-      auth: {
-        clientId: CFG.CLIENT_ID,
-        authority: "https://login.microsoftonline.com/" + CFG.TENANT_ID,
-        redirectUri: window.location.origin + window.location.pathname
-      },
-      cache: { cacheLocation: "localStorage", storeAuthStateInCookie: false }
+    tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: CFG.CLIENT_ID,
+      scope: SCOPE,
+      callback: function () {} // set per-request in requestToken()
     });
 
-    msalInstance.handleRedirectPromise().then(function (resp) {
-      var accounts = msalInstance.getAllAccounts();
-      if (accounts.length > 0) {
-        state.account = accounts[0];
-        state.connected = true;
-        renderHeaderActions();
-        loadTasks(false);
-      } else {
-        renderBanner("", "Not connected. Click “Connect Microsoft 365” to load your tasks from OneDrive.");
-        renderHeaderActions();
-      }
-    }).catch(function (err) {
-      renderBanner("err", "Sign-in error: " + escapeHtml(err.message || String(err)));
-      renderHeaderActions();
-    });
-  }
+    var cachedToken = null, cachedExp = 0;
+    try {
+      cachedToken = localStorage.getItem("gd_access_token");
+      cachedExp = Number(localStorage.getItem("gd_token_expires_at") || 0);
+    } catch (e) {}
 
-  function signIn() {
-    var loginReq = { scopes: ["Files.ReadWrite", "User.Read"] };
-    msalInstance.loginPopup(loginReq).then(function (resp) {
-      state.account = resp.account;
+    if (cachedToken && cachedExp > Date.now()) {
+      state.accessToken = cachedToken;
       state.connected = true;
       renderHeaderActions();
       loadTasks(false);
-    }).catch(function (err) {
-      renderBanner("err", "Sign-in failed: " + escapeHtml(err.message || String(err)) + " — if this keeps happening, send me the exact message.");
-    });
+    } else {
+      requestToken(true); // try silently first — only shows a popup if there's no existing Google session/consent
+    }
   }
+
+  function requestToken(silent) {
+    tokenClient.callback = function (resp) {
+      if (resp.error) {
+        clearToken();
+        state.connected = false;
+        renderHeaderActions();
+        if (silent) {
+          renderBanner("", "Not connected. Click “Connect Google Drive” to load your tasks.");
+        } else {
+          renderBanner("err", "Sign-in failed: " + escapeHtml(resp.error) + " — if this keeps happening, send me the exact message.");
+        }
+        return;
+      }
+      saveToken(resp.access_token, resp.expires_in);
+      state.connected = true;
+      renderHeaderActions();
+      loadTasks(false);
+    };
+    tokenClient.requestAccessToken(silent ? { prompt: "" } : {});
+  }
+
+  function signIn() { requestToken(false); }
 
   function signOut() {
-    state.connected = false; state.account = null; state.tasks = []; state.rowIndexById = {};
+    state.connected = false; clearToken(); state.tasks = []; state.rowIndexById = {};
     renderHeaderActions(); render();
-    renderBanner("", "Signed out. Click “Connect Microsoft 365” to reconnect.");
+    renderBanner("", "Signed out. Click “Connect Google Drive” to reconnect.");
   }
 
-  function getToken() {
-    var req = { scopes: ["Files.ReadWrite", "User.Read"], account: state.account };
-    return msalInstance.acquireTokenSilent(req).catch(function () {
-      return msalInstance.acquireTokenPopup(req);
-    }).then(function (resp) { return resp.accessToken; });
-  }
-
-  function graphFetch(path, opts) {
+  function gFetch(url, opts) {
     opts = opts || {};
-    return getToken().then(function (token) {
-      var headers = Object.assign({ Authorization: "Bearer " + token }, opts.headers || {});
-      return fetch(GRAPH + path, Object.assign({}, opts, { headers: headers }));
+    var headers = Object.assign({ Authorization: "Bearer " + state.accessToken }, opts.headers || {});
+    return fetch(url, Object.assign({}, opts, { headers: headers })).then(function (r) {
+      if (r.status === 401) {
+        clearToken(); state.connected = false; renderHeaderActions();
+        throw new Error("Your session expired — click “Connect Google Drive” to reconnect.");
+      }
+      return r;
     });
   }
 
-  // ---------------- Data load / provisioning ----------------
-  function b64ToBytes(b64) {
-    var bin = atob(b64);
-    var bytes = new Uint8Array(bin.length);
-    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return bytes;
-  }
-
-  function ensureFolderExists() {
-    var folderName = CFG.FILE_PATH.split("/")[0];
-    return graphFetch("/me/drive/root/children", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: folderName, folder: {}, "@microsoft.graph.conflictBehavior": "fail" })
-    }).then(function (r) {
-      if (r.ok || r.status === 409) return true; // created, or already exists
-      return r.text().then(function (t) { throw new Error("Couldn't create OneDrive folder (" + r.status + "): " + t); });
-    });
-  }
-
-  function ensureFileExists() {
-    return graphFetch(FILE_ITEM_PATH).then(function (r) {
-      if (r.status === 200) return true;
-      if (r.status === 404) {
-        return ensureFolderExists().then(function () {
-          var bytes = b64ToBytes(TEMPLATE_XLSX_B64);
-          return graphFetch(FILE_ITEM_PATH + ":/content", {
-            method: "PUT",
-            headers: { "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
-            body: bytes
-          }).then(function (r2) {
-            if (!r2.ok) return r2.text().then(function(t){ throw new Error("Couldn't create tasks.xlsx (" + r2.status + "): " + t); });
-            return true;
-          });
+  // ---------------- Data load / provisioning (Google Sheets) ----------------
+  function findOrCreateSpreadsheet() {
+    var q = encodeURIComponent("name='" + CFG.FILE_NAME + "' and trashed=false");
+    return gFetch(DRIVE_API + "?q=" + q + "&fields=files(id,name)&spaces=drive").then(function (r) {
+      if (!r.ok) return r.text().then(function(t){ throw new Error("Couldn't search Google Drive (" + r.status + "): " + t); });
+      return r.json();
+    }).then(function (d) {
+      if (d.files && d.files.length > 0) {
+        return gFetch(SHEETS_API + "/" + d.files[0].id + "?fields=spreadsheetId,sheets.properties").then(function (r2) {
+          if (!r2.ok) return r2.text().then(function(t){ throw new Error("Couldn't open the tasks sheet (" + r2.status + "): " + t); });
+          return r2.json();
+        }).then(function (meta) {
+          state.spreadsheetId = meta.spreadsheetId;
+          state.sheetId = meta.sheets[0].properties.sheetId;
         });
       }
-      return r.text().then(function (t) { throw new Error("Couldn't reach OneDrive (" + r.status + "): " + t); });
+      // Doesn't exist yet — create it, with a header row.
+      return gFetch(SHEETS_API, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ properties: { title: CFG.FILE_NAME }, sheets: [{ properties: { title: CFG.SHEET_NAME } }] })
+      }).then(function (r3) {
+        if (!r3.ok) return r3.text().then(function(t){ throw new Error("Couldn't create the tasks sheet (" + r3.status + "): " + t); });
+        return r3.json();
+      }).then(function (created) {
+        state.spreadsheetId = created.spreadsheetId;
+        state.sheetId = created.sheets[0].properties.sheetId;
+        return gFetch(SHEETS_API + "/" + state.spreadsheetId + "/values/" + encodeURIComponent(CFG.SHEET_NAME + "!A1") + "?valueInputOption=RAW", {
+          method: "PUT", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ values: [COLUMNS] })
+        });
+      }).then(function (r4) {
+        if (r4 && !r4.ok) return r4.text().then(function(t){ throw new Error("Couldn't write the header row (" + r4.status + "): " + t); });
+      });
     });
   }
-
-  function rowsUrl(suffix) { return FILE_ITEM_PATH + ":/workbook/tables/" + CFG.TABLE_NAME + "/rows" + (suffix || ""); }
 
   function loadTasks(manual) {
     if (state.busy) return;
     state.busy = true;
-    renderBanner("", '<span class="spinner"></span> Connecting to OneDrive…');
-    ensureFileExists().then(function () {
-      return graphFetch(rowsUrl());
+    renderBanner("", '<span class="spinner"></span> Connecting to Google Drive…');
+    findOrCreateSpreadsheet().then(function () {
+      return gFetch(SHEETS_API + "/" + state.spreadsheetId + "/values/" + encodeURIComponent(CFG.SHEET_NAME + "!A2:J"));
     }).then(function (r) {
       if (!r.ok) return r.text().then(function(t){ throw new Error("Couldn't read tasks (" + r.status + "): " + t); });
       return r.json();
     }).then(function (data) {
       state.tasks = [];
       state.rowIndexById = {};
-      (data.value || []).forEach(function (row, i) {
-        var v = row.values[0];
+      (data.values || []).forEach(function (v, i) {
         if (!v || !v[0]) return; // skip blank rows
         var task = {
           id: v[0], title: v[1] || "", project: v[2] || "", priority: v[3] || "medium",
           deadline: v[4] || "", status: v[5] || "todo", notes: v[6] || "",
           emailSubject: v[7] || "", emailLink: v[8] || "", createdAt: Number(v[9]) || Date.now()
         };
-        state.rowIndexById[task.id] = row.index;
+        state.rowIndexById[task.id] = i; // 0-indexed within the A2:J range
         state.tasks.push(task);
       });
       state.connected = true;
-      renderBanner("ok", "Connected — synced with <code>" + escapeHtml(CFG.FILE_PATH) + "</code>" + (manual ? " (refreshed)" : ""));
+      renderBanner("ok", "Connected — synced with <code>" + escapeHtml(CFG.FILE_NAME) + "</code>" + (manual ? " (refreshed)" : ""));
       render();
     }).catch(function (err) {
       renderBanner("err", escapeHtml(err.message) + " — if this persists, send me this exact message.");
@@ -482,9 +492,10 @@
 
   function addTaskRemote(task) {
     var values = [task.id, task.title, task.project, task.priority, task.deadline, task.status, task.notes, task.emailSubject||"", task.emailLink||"", String(task.createdAt)];
-    return withBusy(graphFetch(rowsUrl("/add"), {
+    var range = encodeURIComponent(CFG.SHEET_NAME + "!A1:J1");
+    return withBusy(gFetch(SHEETS_API + "/" + state.spreadsheetId + "/values/" + range + ":append?valueInputOption=RAW", {
       method: "POST", headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({ index: null, values: [values] })
+      body: JSON.stringify({ values: [values] })
     })).then(function (r) {
       if (!r.ok) return r.text().then(function(t){ throw new Error("Couldn't save the new task (" + r.status + "): " + t); });
       return loadTasks(false);
@@ -494,11 +505,11 @@
   function updateTaskRemote(task) {
     var idx = state.rowIndexById[task.id];
     if (idx === undefined) return addTaskRemote(task);
-    var sheetRow = idx + 2; // header is row 1, table data starts row 2
-    var range = "A" + sheetRow + ":J" + sheetRow;
+    var sheetRow = idx + 2; // header is row 1, data starts row 2
+    var range = encodeURIComponent(CFG.SHEET_NAME + "!A" + sheetRow + ":J" + sheetRow);
     var values = [task.id, task.title, task.project, task.priority, task.deadline, task.status, task.notes, task.emailSubject||"", task.emailLink||"", String(task.createdAt)];
-    return withBusy(graphFetch(FILE_ITEM_PATH + ":/workbook/worksheets('" + CFG.TABLE_NAME + "')/range(address='" + range + "')", {
-      method: "PATCH", headers: {"Content-Type":"application/json"},
+    return withBusy(gFetch(SHEETS_API + "/" + state.spreadsheetId + "/values/" + range + "?valueInputOption=RAW", {
+      method: "PUT", headers: {"Content-Type":"application/json"},
       body: JSON.stringify({ values: [values] })
     })).then(function (r) {
       if (!r.ok) return r.text().then(function(t){ throw new Error("Couldn't update the task (" + r.status + "): " + t); });
@@ -509,8 +520,12 @@
   function deleteTaskRemote(taskId) {
     var idx = state.rowIndexById[taskId];
     if (idx === undefined) return Promise.resolve();
-    return withBusy(graphFetch(rowsUrl("/" + idx), { method: "DELETE" })).then(function (r) {
-      if (!r.ok && r.status !== 204) return r.text().then(function(t){ throw new Error("Couldn't delete the task (" + r.status + "): " + t); });
+    var startRow = idx + 1; // 0-indexed sheet row; data row idx=0 -> sheet index 1 (row 2)
+    return withBusy(gFetch(SHEETS_API + "/" + state.spreadsheetId + ":batchUpdate", {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ requests: [{ deleteDimension: { range: { sheetId: state.sheetId, dimension: "ROWS", startIndex: startRow, endIndex: startRow + 1 } } }] })
+    })).then(function (r) {
+      if (!r.ok) return r.text().then(function(t){ throw new Error("Couldn't delete the task (" + r.status + "): " + t); });
       return loadTasks(false);
     });
   }
@@ -565,7 +580,7 @@
     if (!state.connected) { el.projectGroups.innerHTML = ""; return; }
     var tasks = filteredTasks();
     if (tasks.length===0) {
-      el.projectGroups.innerHTML = '<div class="empty-state"><strong>No tasks yet</strong>Add one, or create one straight from an email in Outlook.</div>';
+      el.projectGroups.innerHTML = '<div class="empty-state"><strong>No tasks yet</strong>Click "+ Add task" to create your first one.</div>';
       return;
     }
     var byProject = {};
