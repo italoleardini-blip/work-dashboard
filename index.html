@@ -252,6 +252,43 @@
   </div>
 </div>
 
+<div class="modal-overlay hidden" id="quick-add-overlay">
+  <div class="modal">
+    <h3>Quick add (paste)</h3>
+    <p style="margin:-10px 0 14px;font-size:12.5px;color:var(--text-secondary);">
+      Paste any text — an email summary, a Copilot reply, whatever. The first line becomes the task title, the rest becomes notes.
+    </p>
+    <div class="field">
+      <label for="qa-text">Paste here</label>
+      <textarea id="qa-text" style="min-height:130px;" placeholder="First line = title&#10;Everything else = notes…" autofocus></textarea>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="qa-project">Project</label>
+        <input type="text" id="qa-project" list="project-suggestions" placeholder="e.g. Marketing site relaunch">
+      </div>
+      <div class="field">
+        <label for="qa-priority">Priority</label>
+        <select id="qa-priority">
+          <option value="high">High</option>
+          <option value="medium" selected>Medium</option>
+          <option value="low">Low</option>
+        </select>
+      </div>
+    </div>
+    <div class="field">
+      <label for="qa-deadline">Deadline (optional)</label>
+      <input type="date" id="qa-deadline">
+    </div>
+    <div class="modal-actions">
+      <div class="right">
+        <button type="button" class="ghost" id="btn-qa-cancel">Cancel</button>
+        <button type="button" class="primary" id="btn-qa-save">Save task</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"><span id="toast-msg"></span></div>
 
 <script>
@@ -290,7 +327,8 @@
   ["stats","project-groups","search","filter-project","filter-priority","filter-status","sort-by",
    "modal-overlay","modal-title","task-form","f-id","f-title","f-project","f-priority","f-status",
    "f-deadline","f-notes","project-suggestions","btn-cancel","btn-delete","btn-save",
-   "conn-banner","header-actions","toast","toast-msg"].forEach(function(id){
+   "conn-banner","header-actions","toast","toast-msg",
+   "quick-add-overlay","qa-text","qa-project","qa-priority","qa-deadline","btn-qa-cancel","btn-qa-save"].forEach(function(id){
     el[id.replace(/-([a-z])/g, function(_,c){return c.toUpperCase();})] = document.getElementById(id);
   });
 
@@ -319,8 +357,10 @@
         '<span style="font-size:12.5px;color:var(--text-secondary);">Connected</span>' +
         '<button class="ghost" id="btn-refresh">⟳ Refresh</button>' +
         '<button class="ghost" id="btn-signout">Sign out</button>' +
+        '<button class="ghost" id="btn-quick-add">📋 Quick add</button>' +
         '<button class="primary" id="btn-add">+ Add task</button>';
       document.getElementById("btn-add").addEventListener("click", function(){ openModal(null); });
+      document.getElementById("btn-quick-add").addEventListener("click", openQuickAdd);
       document.getElementById("btn-refresh").addEventListener("click", function(){ loadTasks(true); });
       document.getElementById("btn-signout").addEventListener("click", signOut);
     } else {
@@ -682,6 +722,47 @@
       state.tasks.push(newTask); closeModal(); render();
       addTaskRemote(newTask).then(function(){ showToast("Task added"); }).catch(function(err){ showToast(err.message); });
     }
+  });
+
+  // ---------------- Quick add (paste) ----------------
+  function openQuickAdd() {
+    el.qaText.value = "";
+    var lastProject = "";
+    try { lastProject = localStorage.getItem("qa_last_project") || ""; } catch (e) {}
+    el.qaProject.value = lastProject;
+    el.qaPriority.value = "medium";
+    el.qaDeadline.value = "";
+    el.quickAddOverlay.classList.remove("hidden");
+    el.qaText.focus();
+  }
+  function closeQuickAdd() { el.quickAddOverlay.classList.add("hidden"); }
+  el.btnQaCancel.addEventListener("click", closeQuickAdd);
+  el.quickAddOverlay.addEventListener("click", function(e){ if (e.target===el.quickAddOverlay) closeQuickAdd(); });
+  document.addEventListener("keydown", function(e){ if (e.key==="Escape" && !el.quickAddOverlay.classList.contains("hidden")) closeQuickAdd(); });
+
+  function saveQuickAdd() {
+    var raw = el.qaText.value.replace(/\r\n/g, "\n");
+    var lines = raw.split("\n");
+    var titleLine = "", titleIdx = -1;
+    for (var i = 0; i < lines.length; i++) {
+      if (lines[i].trim()) { titleLine = lines[i].trim(); titleIdx = i; break; }
+    }
+    if (!titleLine) { showToast("Paste some text first"); return; }
+    var notes = lines.slice(titleIdx + 1).join("\n").trim();
+    var project = el.qaProject.value.trim() || "Inbox";
+
+    try { localStorage.setItem("qa_last_project", project); } catch (e) {}
+
+    var newTask = Object.assign({ id: uid(), createdAt: Date.now(), emailSubject:"", emailLink:"" }, {
+      title: titleLine, project: project, priority: el.qaPriority.value,
+      status: "todo", deadline: el.qaDeadline.value, notes: notes
+    });
+    state.tasks.push(newTask); closeQuickAdd(); render();
+    addTaskRemote(newTask).then(function(){ showToast("Task added"); }).catch(function(err){ showToast(err.message); });
+  }
+  el.btnQaSave.addEventListener("click", saveQuickAdd);
+  el.qaText.addEventListener("keydown", function(e){
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); saveQuickAdd(); }
   });
 
   el.search.addEventListener("input", function(){ state.filters.search = el.search.value; renderGroups(); });
