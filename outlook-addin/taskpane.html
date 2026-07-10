@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Create task</title>
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+<script src="https://accounts.google.com/gsi/client"></script>
+<style>
+  :root {
+    --surface-1:      #fcfcfb;
+    --page:           #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --border:         rgba(11,11,11,0.10);
+    --series-blue:    #2a78d6;
+    --good:           #0ca30c;
+    --good-bg:        #e5f6e5;
+    --warning:        #fab219;
+    --warning-bg:     #fef3dc;
+    --critical:       #d03b3b;
+    --critical-bg:    #fbe6e6;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin:0; padding:0; background:var(--page); color:var(--text-primary); font-family: system-ui,-apple-system,"Segoe UI",sans-serif; font-size:14px; }
+  .wrap { padding:16px; }
+  h1 { font-size:15px; margin:0 0 4px; }
+  p.sub { margin:0 0 16px; color:var(--text-secondary); font-size:12.5px; }
+
+  .banner { border:1px solid var(--border); border-radius:8px; padding:10px 12px; margin-bottom:14px; font-size:12.5px; background:var(--surface-1); }
+  .banner.warn { border-color:var(--warning); background:var(--warning-bg); }
+  .banner.err { border-color:var(--critical); background:var(--critical-bg); color:var(--critical); }
+  .banner.ok { border-color:var(--good); background:var(--good-bg); color:#0a6b0a; }
+
+  .field { margin-bottom:12px; }
+  .field label { display:block; font-size:12px; color:var(--text-secondary); margin-bottom:4px; font-weight:500; }
+  .field input[type="text"], .field input[type="date"], .field select, .field textarea {
+    width:100%; font-family:inherit; font-size:13.5px; padding:7px 9px;
+    border-radius:7px; border:1px solid var(--border); background:var(--surface-1); color:var(--text-primary);
+  }
+  .field textarea { resize:vertical; min-height:70px; }
+  .field-row { display:flex; gap:8px; }
+  .field-row .field { flex:1; }
+
+  button { width:100%; font-family:inherit; font-size:14px; font-weight:600; cursor:pointer; border-radius:8px; border:1px solid var(--series-blue); background:var(--series-blue); color:#fff; padding:10px 13px; }
+  button:hover { filter:brightness(1.07); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  button.ghost { background:var(--surface-1); color:var(--text-primary); border-color:var(--border); margin-top:8px; }
+
+  .email-preview { font-size:12px; color:var(--text-muted); border-left:2px solid var(--gridline); padding-left:8px; margin-bottom:14px; max-height:60px; overflow:hidden; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Create task from this email</h1>
+  <p class="sub">Saves straight into your Work Dashboard.</p>
+
+  <div id="banner" class="banner">Loading…</div>
+
+  <form id="task-form" style="display:none;">
+    <div class="field">
+      <label for="f-title">Title</label>
+      <input type="text" id="f-title" required>
+    </div>
+    <div class="field">
+      <label for="f-project">Project</label>
+      <input type="text" id="f-project" required placeholder="e.g. Acme onboarding">
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="f-priority">Priority</label>
+        <select id="f-priority">
+          <option value="high">High</option>
+          <option value="medium" selected>Medium</option>
+          <option value="low">Low</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="f-deadline">Deadline</label>
+        <input type="date" id="f-deadline">
+      </div>
+    </div>
+    <div class="field">
+      <label for="f-notes">Notes</label>
+      <textarea id="f-notes"></textarea>
+    </div>
+    <button type="submit" id="btn-save">Save task</button>
+    <button type="button" class="ghost" id="btn-signin" style="display:none;">Connect Google Drive</button>
+  </form>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ======================================================================
+  // SETUP: same Client ID as the dashboard's index.html.
+  // ======================================================================
+  var CLIENT_ID = "133220347825-vrkjjflemmm22m721l2vu9u2voo5vejf.apps.googleusercontent.com";
+  var FILE_NAME = "Work Dashboard Tasks";
+  var SHEET_NAME = "Sheet1";
+  var SCOPE = "https://www.googleapis.com/auth/drive.file";
+  var SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets";
+  var DRIVE_API = "https://www.googleapis.com/drive/v3/files";
+
+  function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
+  function escapeHtml(str) { return String(str).replace(/[&<>"']/g, function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];}); }
+
+  var banner = document.getElementById("banner");
+  var form = document.getElementById("task-form");
+  var btnSignin = document.getElementById("btn-signin");
+  var btnSave = document.getElementById("btn-save");
+
+  function setBanner(mode, msg) {
+    banner.className = "banner" + (mode ? " " + mode : "");
+    banner.innerHTML = msg;
+    banner.style.display = "block";
+  }
+
+  var accessToken = null;
+  var spreadsheetId = null;
+  var emailLink = "";
+  var emailSubject = "";
+
+  function saveToken(t, expiresIn) {
+    accessToken = t;
+    try {
+      localStorage.setItem("gd_access_token", t);
+      localStorage.setItem("gd_token_expires_at", String(Date.now() + (expiresIn ? expiresIn*1000 : 3500*1000)));
+    } catch (e) {}
+  }
+
+  function cachedToken() {
+    try {
+      var t = localStorage.getItem("gd_access_token");
+      var exp = Number(localStorage.getItem("gd_token_expires_at") || 0);
+      if (t && exp > Date.now()) return t;
+    } catch (e) {}
+    return null;
+  }
+
+  var tokenClient = null;
+
+  function ensureSignedIn(silent) {
+    return new Promise(function (resolve, reject) {
+      var cached = cachedToken();
+      if (cached) { accessToken = cached; resolve(); return; }
+      if (!tokenClient) { reject(new Error("Google sign-in isn't ready yet — try again in a second.")); return; }
+      tokenClient.callback = function (resp) {
+        if (resp.error) { reject(new Error(resp.error)); return; }
+        saveToken(resp.access_token, resp.expires_in);
+        resolve();
+      };
+      tokenClient.requestAccessToken(silent ? { prompt: "" } : {});
+    });
+  }
+
+  function gFetch(url, opts) {
+    opts = opts || {};
+    var headers = Object.assign({ Authorization: "Bearer " + accessToken }, opts.headers || {});
+    return fetch(url, Object.assign({}, opts, { headers: headers }));
+  }
+
+  function findOrCreateSpreadsheet() {
+    if (spreadsheetId) return Promise.resolve();
+    var q = encodeURIComponent("name='" + FILE_NAME + "' and trashed=false");
+    return gFetch(DRIVE_API + "?q=" + q + "&fields=files(id,name)&spaces=drive").then(function (r) { return r.json(); }).then(function (d) {
+      if (d.files && d.files.length > 0) { spreadsheetId = d.files[0].id; return; }
+      return gFetch(SHEETS_API, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ properties: { title: FILE_NAME }, sheets: [{ properties: { title: SHEET_NAME } }] })
+      }).then(function (r) { return r.json(); }).then(function (created) {
+        spreadsheetId = created.spreadsheetId;
+        var cols = ["Id","Title","Project","Priority","Deadline","Status","Notes","EmailSubject","EmailLink","CreatedAt"];
+        return gFetch(SHEETS_API + "/" + spreadsheetId + "/values/" + encodeURIComponent(SHEET_NAME + "!A1") + "?valueInputOption=RAW", {
+          method: "PUT", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ values: [cols] })
+        });
+      });
+    });
+  }
+
+  function saveTask(data) {
+    var values = [uid(), data.title, data.project, data.priority, data.deadline, "todo", data.notes, emailSubject, emailLink, String(Date.now())];
+    var range = encodeURIComponent(SHEET_NAME + "!A1:J1");
+    return gFetch(SHEETS_API + "/" + spreadsheetId + "/values/" + range + ":append?valueInputOption=RAW", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ values: [values] })
+    }).then(function (r) {
+      if (!r.ok) return r.text().then(function (t) { throw new Error("Couldn't save (" + r.status + "): " + t); });
+    });
+  }
+
+  // ---------------- Read the current email via Office.js ----------------
+  function loadEmailIntoForm() {
+    var item = Office.context.mailbox.item;
+    emailSubject = item.subject || "";
+    document.getElementById("f-title").value = emailSubject;
+
+    var fromName = (item.from && item.from.displayName) || "";
+    var fromAddr = (item.from && item.from.emailAddress) || "";
+
+    try {
+      var restId = Office.context.mailbox.convertToRestId(item.itemId, Office.MailboxEnums.RestVersion.v2_0);
+      emailLink = "https://outlook.office.com/mail/deeplink/read/" + restId;
+    } catch (e) { emailLink = ""; }
+
+    item.body.getAsync(Office.CoercionType.Text, function (result) {
+      var bodyText = (result.status === Office.AsyncResultStatus.Succeeded) ? result.value : "";
+      var excerpt = bodyText.trim().slice(0, 400);
+      document.getElementById("f-notes").value = "From: " + fromName + " <" + fromAddr + ">\n\n" + excerpt;
+    });
+
+    // Remember last-used project as a small convenience
+    try {
+      var lastProject = localStorage.getItem("wd_last_project");
+      if (lastProject) document.getElementById("f-project").value = lastProject;
+    } catch (e) {}
+  }
+
+  // ---------------- Wire up ----------------
+  if (!window.Office) {
+    setBanner("err", "This page only works inside Outlook (as an add-in task pane).");
+  } else {
+  Office.onReady(function () {
+    loadEmailIntoForm();
+
+    if (!CLIENT_ID || CLIENT_ID.indexOf("YOUR_") === 0) {
+      setBanner("warn", "Setup needed — ask Claude to finish wiring up the Client ID.");
+      return;
+    }
+    if (!window.google || !window.google.accounts || !window.google.accounts.oauth2) {
+      setBanner("err", "Couldn't load the Google sign-in library. Check your internet connection.");
+      return;
+    }
+
+    tokenClient = google.accounts.oauth2.initTokenClient({ client_id: CLIENT_ID, scope: SCOPE, callback: function () {} });
+
+    form.style.display = "block";
+    banner.style.display = "none";
+
+    ensureSignedIn(true).catch(function () {
+      // Silent attempt failed — that's fine, the visible "Connect" button below covers it.
+      btnSignin.style.display = "block";
+    });
+  });
+  }
+
+  btnSignin.addEventListener("click", function () {
+    ensureSignedIn(false).then(function () {
+      btnSignin.style.display = "none";
+      setBanner("ok", "Connected.");
+      setTimeout(function () { banner.style.display = "none"; }, 1500);
+    }).catch(function (err) {
+      setBanner("err", "Sign-in failed: " + escapeHtml(err.message));
+    });
+  });
+
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var data = {
+      title: document.getElementById("f-title").value.trim(),
+      project: document.getElementById("f-project").value.trim(),
+      priority: document.getElementById("f-priority").value,
+      deadline: document.getElementById("f-deadline").value,
+      notes: document.getElementById("f-notes").value.trim()
+    };
+    if (!data.title || !data.project) { setBanner("warn", "Title and project are required."); return; }
+
+    btnSave.disabled = true; btnSave.textContent = "Saving…";
+    ensureSignedIn(true).catch(function () { return ensureSignedIn(false); })
+      .then(findOrCreateSpreadsheet)
+      .then(function () { return saveTask(data); })
+      .then(function () {
+        try { localStorage.setItem("wd_last_project", data.project); } catch (e) {}
+        setBanner("ok", "✓ Task created — check your Work Dashboard.");
+        btnSave.textContent = "Save task";
+        btnSave.disabled = false;
+      })
+      .catch(function (err) {
+        setBanner("err", escapeHtml(err.message) + " — send this to Claude if it keeps happening.");
+        btnSave.textContent = "Save task";
+        btnSave.disabled = false;
+      });
+  });
+})();
+</script>
+</body>
+</html>
